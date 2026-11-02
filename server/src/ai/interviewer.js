@@ -1,12 +1,14 @@
 import { diagnosticHits } from '../summary/generate.js';
 
-// The AI interviewer: after the reason for the visit, the emergency screen, medicines and allergies, a model writes each further
-// question from what the patient has said so far. The model only proposes; checkQuestion decides. A question that is malformed, not in
-// all three languages, repeats an earlier one, or states a diagnosis or gives advice is never shown, and the interview falls back to
-// the fixed question tree (interview/routes.js). Only de-identified facts are sent: the reason, the answers, age group and sex.
+// The AI interviewer: after the reason for the visit and the emergency screen, a model writes each further question from what the
+// patient has said so far; medicines and allergies are asked last by the system. The model only proposes; checkQuestion decides. A
+// question that is malformed, not in all three languages, repeats an earlier one, or states a diagnosis or gives advice is never shown.
+// If the model fails before its first question the interview uses the fixed question tree (interview/routes.js); if it fails later the
+// AI part ends and the closing questions follow. Only de-identified facts are sent: the reason, the answers, age group and sex.
 //
 // Provider: Google Gemini (generateContent with a JSON reply). Off unless AI_INTERVIEW_PROVIDER=gemini and GEMINI_API_KEY are set.
 
+export const MIN_FOLLOWUPS = 3; // the model may not say it has enough before this many of its own questions
 export const COMPLAINT_VALUES = ['chest_pain', 'fever', 'back_pain', 'cough', 'abdominal_pain', 'headache', 'other'];
 const TYPES = ['yes_no', 'single', 'multi', 'number', 'text'];
 const VALUE = /^[a-z0-9_]{1,40}$/;
@@ -16,22 +18,26 @@ const ADVICE = /\b(you (may|might|probably|likely) have|you should|take (this|th
 const NONE = { value: 'none', label: ['None of these', 'इनमें से कोई नहीं', 'यापैकी काही नाही'] };
 const YES_NO = [{ value: 'yes', label: ['Yes', 'हाँ', 'होय'] }, { value: 'no', label: ['No', 'नहीं', 'नाही'] }];
 
-export const SYSTEM = `You help a hospital outpatient department in India take a patient's history before they see the doctor.
-You are given what the patient said so far: the reason for the visit in their own words, and questions already asked with the answers.
-Write the ONE next question that would most help the doctor understand this complaint (for example: where, since when, how it started,
-how bad, what makes it better or worse, related symptoms). Choose it from the answers: follow up on what the patient actually said.
+export const SYSTEM = `You interview a patient for a hospital outpatient department in India, before they see the doctor, like a careful nurse taking a history.
+You are given what the patient said so far: the reason for the visit in their own words, and the questions already asked with the answers.
+You write the ONE next question, every time, from what this patient actually said. There is no fixed list: follow this patient's story.
+Good follow-ups cover, as the story needs: where, since when, how it started, how bad, what makes it better or worse, what came with it,
+whether it has happened before, and how it affects daily life. Pick the most useful gap in what the doctor would otherwise not know.
+Use the patient's own words and details from earlier answers. Never ask something the answers already tell you.
 
 Rules you must follow:
 - Ask only questions. Never diagnose, never name a possible disease or cause, never give advice, tests or treatment.
-- Do not ask again about emergency signs, current medicines or allergies: those were already asked.
+- Emergency signs, current medicines and allergies are asked separately by the system, at the end. Never ask about them.
 - Do not repeat or rephrase a question that was already asked.
 - Very simple words, for someone with little schooling. One short sentence.
 - Prefer answer choices: "yes_no", "single" (choose one) or "multi" (choose several) with 2 to 6 short options.
   Use "number" only for a 0 to 10 score, and "text" only when choices cannot work.
 - Option values are short English snake_case words (for example "since_yesterday").
 - Give every text in English, Hindi (Devanagari script) and Marathi (Devanagari script).
-- Set "done": true (with no question) when the doctor already has enough, or when "remaining" is 0.
-- Set "attention": true only if an answer suggests staff should look at the patient soon; say why in "attentionReason" (English).
+- "minimumStillNeeded" is how many more questions you must ask before you may stop. While it is above 0, never set "done".
+- Set "done": true (with no question) when the doctor already has enough to understand the problem, or when "remaining" is 0.
+- Set "attention": true if an answer suggests staff should look at the patient soon (for example severe or sudden symptoms,
+  trouble breathing, fainting, bleeding, confusion); say why in "attentionReason" (English). Do not alarm the patient in the question itself.
 - "complaint" is the closest of: ${COMPLAINT_VALUES.join(', ')}.
 
 Reply with only this JSON object:
@@ -85,24 +91,28 @@ export function checkQuestion(reply, asked = []) {
 }
 
 // The facts sent to the model: no name, contact number, identifier or address. Age as a band.
-export function interviewFacts({ reason, asked, ageGroup, sex, remaining }) {
-  return { reasonForVisit: reason, person: { ageGroup, sex }, alreadyAsked: asked, remaining };
+export function interviewFacts({ reason, asked, ageGroup, sex, remaining, minimumStillNeeded = 0 }) {
+  return { reasonForVisit: reason, person: { ageGroup, sex }, alreadyAsked: asked, remaining, minimumStillNeeded };
 }
 
-export function createGeminiInterviewer({ apiKey, model = 'gemini-3.8-flash', fetchImpl = fetch, timeoutMs = 8000, baseUrl = 'https://generativelanguage.googleapis.com' }) {
+export function createGeminiInterviewer({ apiKey, model = 'gemini-3.6-flash', fetchImpl = fetch, timeoutMs = 20000, retryMs = 3000, baseUrl = 'https://generativelanguage.googleapis.com' }) {
   if (!apiKey) throw new Error('GEMINI_API_KEY is required when AI_INTERVIEW_PROVIDER=gemini');
   return {
     name: 'gemini', model,
     async next(facts) {
-      const res = await fetchImpl(`${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      // a busy or rate-limited service (503, 429) is tried once more after a short wait
+      const call = () => fetchImpl(`${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST', signal: AbortSignal.timeout(timeoutMs),
         headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM }] },
           contents: [{ role: 'user', parts: [{ text: JSON.stringify(facts) }] }],
-          generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 1500 },
+          // low thinking: the model's own reasoning otherwise uses up the output budget and makes each question slow
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 4000, thinkingConfig: { thinkingLevel: 'low' } },
         }),
       });
+      let res = await call();
+      if ([429, 503].includes(res.status)) { await new Promise((r) => setTimeout(r, retryMs)); res = await call(); }
       if (!res.ok) throw new Error(`the model service answered ${res.status}`);
       const body = await res.json();
       return parseReply((body.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''));

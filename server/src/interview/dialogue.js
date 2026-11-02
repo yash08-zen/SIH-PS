@@ -56,29 +56,33 @@ function path(answers) {
   return { questions: out, done: true };
 }
 
-// The AI interview (ai/interviewer.js): the reason, the emergency screen, then medicines and allergies, then questions written by the
-// model from the answers so far, until the model says it has enough or MAX_QUESTIONS are asked. An AI question is stored with its answer
-// (answer.question), so the path can be rebuilt from the answers alone; `pending` is the AI question waiting for an answer.
+// The AI interview (ai/interviewer.js): the reason, the emergency screen, then questions written by the model from the answers so far,
+// until the model says it has enough or AI_FOLLOWUPS are asked; medicines and allergies always come last (safety questions, always asked).
+// An AI question is stored with its answer (answer.question), so the path can be rebuilt from the answers alone; `pending` is the AI
+// question waiting for an answer. Readers that pass no engine state (summaries, metrics) get the path as recorded: the AI part is closed.
 export const isAiKey = (key) => key.startsWith('ai.');
 export const AI_FIXED = ['cc.reason', 'emergency.screen'];
+export const AI_TOTAL = 12; // most questions asked in an AI interview, closing questions included
+export const AI_FOLLOWUPS = AI_TOTAL - AI_FIXED.length - CLOSING_MAX; // most questions the model may write
 const aiQuestionOf = (key, answer) => (answer?.question ? { ...answer.question, key } : null);
 const aiKeys = (answers) => Object.keys(answers).filter(isAiKey).sort((a, b) => Number(a.slice(3)) - Number(b.slice(3)));
 
-function aiPath(answers, { pending = null, done = false } = {}) {
+function aiPath(answers, ai) {
   const values = valuesOf(answers);
   const out = [];
   for (const key of AI_FIXED) {
     out.push(byKey.get(key));
     if (!answers[key]) return { questions: out, done: false };
   }
+  for (const key of aiKeys(answers)) out.push(aiQuestionOf(key, answers[key]));
+  if (ai && !ai.done && aiKeys(answers).length < AI_FOLLOWUPS) {
+    return ai.pending ? { questions: [...out, ai.pending], done: false } : { questions: out, done: false, needsAi: true };
+  }
   for (let key = CLOSING; key; key = follow(byKey.get(key), values)) {
     out.push(byKey.get(key));
     if (!answers[key]) return { questions: out, done: false };
   }
-  for (const key of aiKeys(answers)) out.push(aiQuestionOf(key, answers[key]));
-  if (pending && out.length < MAX_QUESTIONS) return { questions: [...out, pending], done: false };
-  const full = out.length >= MAX_QUESTIONS;
-  return { questions: out, done: done || full, needsAi: !done && !full };
+  return { questions: out, done: true };
 }
 // The engine for these answers: AI when the encounter runs it, or when it already holds AI answers (summaries pass no engine).
 const usesAi = (answers, opts) => opts?.engine === 'ai' || (opts?.engine !== 'rules' && aiKeys(answers).length > 0);
@@ -132,7 +136,7 @@ export function nextQuestion(answers, opts) {
   // The rest of the path depends on answers not given yet, so the total is the most it can be (shown as "of about").
   const ayushCount = opts?.ayush ? AYUSH_QUESTIONS.length : 0;
   const needsAi = !next && usesAi(answers, opts) && Boolean(aiPath(answers, opts?.ai).needsAi);
-  return { question: next ?? null, answered, total: next || needsAi ? Math.max(active.length, MAX_QUESTIONS + ayushCount) : answered, needsAi };
+  return { question: next ?? null, answered, total: next || needsAi ? Math.max(active.length, (usesAi(answers, opts) ? AI_TOTAL : MAX_QUESTIONS) + ayushCount) : answered, needsAi };
 }
 
 // The question with this key on the encounter's path: a bank question, the pending AI question, or an AI question already answered.

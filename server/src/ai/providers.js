@@ -90,8 +90,37 @@ export function createAnthropicProvider({ apiKey, model = 'claude-sonnet-5-5', b
   };
 }
 
-export function providerFromEnv(env = process.env) {
-  if ((env.AI_PROVIDER ?? 'rules') === 'anthropic') return createAnthropicProvider({ apiKey: env.ANTHROPIC_API_KEY, model: env.AI_MODEL || undefined, baseUrl: env.ANTHROPIC_BASE_URL || undefined });
+// Google Gemini (generateContent with a JSON reply). Same prompts and checks as the Anthropic writer; shares GEMINI_API_KEY with the interviewer.
+export function createGeminiProvider({ apiKey, model = 'gemini-3.6-flash', baseUrl = 'https://generativelanguage.googleapis.com', fetchImpl = fetch, timeoutMs = 45_000, retryMs = 3000 }) {
+  if (!apiKey) throw new Error('GEMINI_API_KEY is required when AI_PROVIDER=gemini');
+  return {
+    name: 'gemini', model,
+    async narrate({ audience, facts }) {
+      const call = () => fetchImpl(`${baseUrl}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: 'POST', signal: AbortSignal.timeout(timeoutMs),
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM[audience] }] },
+          contents: [{ role: 'user', parts: [{ text: JSON.stringify(facts) }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 6000, thinkingConfig: { thinkingLevel: 'low' } },
+        }),
+      });
+      let res = await call();
+      if ([429, 503].includes(res.status)) { await new Promise((r) => setTimeout(r, retryMs)); res = await call(); }
+      if (!res.ok) throw new Error(`the model service answered ${res.status}`);
+      const body = await res.json();
+      return parseJsonReply((body.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''));
+    },
+  };
+}
+
+export function providerFromEnv(env = process.env, log = console) {
+  const which = env.AI_PROVIDER ?? 'rules';
+  if (which === 'anthropic') return createAnthropicProvider({ apiKey: env.ANTHROPIC_API_KEY, model: env.AI_MODEL || undefined, baseUrl: env.ANTHROPIC_BASE_URL || undefined });
+  if (which === 'gemini') {
+    if (!env.GEMINI_API_KEY) { log.warn('AI_PROVIDER=gemini but GEMINI_API_KEY is empty: the overview is written by rules'); return createRulesProvider(); }
+    return createGeminiProvider({ apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || undefined });
+  }
   return createRulesProvider();
 }
 

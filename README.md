@@ -179,9 +179,19 @@ When a patient submits, an overview is written in the background, once for the d
 
 - The doctor sees it at the top of the Summary tab. A patient who is still answering shows a "live" view of what has been said so far (not submitted, cannot be accepted).
 - The patient sees a short "What you told us" recap on the final screen (`GET /api/patient/summary`). It holds only the patient's own answers: no files, checks, alerts or findings. This departs from the PRD's rule that the patient never sees the analysis, and needs the clinical lead's approval.
-- `AI_PROVIDER=rules` (default) writes the text with fixed rules and sends nothing out. `AI_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` (optional `AI_MODEL`, `ANTHROPIC_BASE_URL`) asks a Claude model instead. Only de-identified facts are sent (age group, sex, answers, file findings), never name, mobile, ID or dates of birth.
+- `AI_PROVIDER=rules` (default) writes the text with fixed rules and sends nothing out. `AI_PROVIDER=gemini` (uses `GEMINI_API_KEY` and `GEMINI_MODEL`, shared with the AI interviewer) or `AI_PROVIDER=anthropic` with `ANTHROPIC_API_KEY` (optional `AI_MODEL`, `ANTHROPIC_BASE_URL`) asks a model instead. Only de-identified facts are sent (age group, sex, answers, file findings), never name, mobile, ID or dates of birth.
 - Every model text is checked: wording that states a diagnosis, or a patient recap that mentions risk or alerts, is replaced by the rule-based text and the reason is stored (`ai_narratives.fallback_reason`). Each overview says who wrote it.
 - The model path is tested against a stand-in service only; it has not been run against the real API. Sending data to an external model needs hospital approval and a consent decision first.
+
+## AI-led interview (Gemini)
+
+With `AI_INTERVIEW_PROVIDER=gemini` and `GEMINI_API_KEY` in `server/.env`, the interview is led by the model instead of the fixed question tree.
+
+- The patient gives the reason for the visit in their own words, then answers the emergency-signs screen. After that the model writes each next question from everything the patient has said, up to 6 questions, and stops when it judges the doctor has enough (it may not stop before 3).
+- Medicines and allergies are always asked last by the system, never by the model. Questions that name a disease, give advice, repeat, have bad options or lack Hindi or Marathi are refused. A failure before the first model question falls back to the fixed tree; a later failure ends the AI part and the closing questions follow.
+- The doctor sees AI-written questions marked "Asked by AI" with the reason.
+- Only de-identified facts (age group, sex, the reason and the answers) are sent to Google. This needs hospital and compliance approval and a consent decision first.
+- Limits to know: the fixed red-flag rules read the tree's questions, so for AI questions the model's own attention flag is what alerts staff. Have a clinician read sample interviews first: `node --env-file=.env server/scripts/export-ai-interviews.js` writes `docs/ai-interview-samples.md`. The real Gemini service has not been run here, only a stand-in.
 
 ## Interface (redesign)
 

@@ -7,29 +7,62 @@ const MAX_LISTEN_MS = 12_000;
 // Browser error codes, folded into the few cases the screens explain differently.
 const ERRORS = { 'no-speech': 'no-speech', aborted: 'no-speech', 'not-allowed': 'denied', 'service-not-allowed': 'denied', 'audio-capture': 'no-mic', network: 'network' };
 
+// Languages whose own voice may be missing from the device, and the voice to read their (Devanagari) text with instead. A Marathi text read by an
+// English voice sounds garbled; the Hindi voice reads the same script correctly and is close enough to understand.
+const FALLBACK_VOICE = { mr: ['mr-IN', 'hi-IN'], hi: ['hi-IN'], en: ['en-IN', 'en-GB', 'en-US'] };
+
+// The best installed voice for the language, or null. Better voices first: a network ("Google", "Natural") voice over a basic local one.
+export function pickVoice(voices, lang) {
+  const list = Array.from(voices ?? []);
+  for (const code of FALLBACK_VOICE[lang] ?? FALLBACK_VOICE.en) {
+    const base = code.slice(0, 2);
+    const match = list.filter((v) => (v.lang ?? '').replace('_', '-').toLowerCase() === code.toLowerCase())
+      .concat(list.filter((v) => (v.lang ?? '').toLowerCase().startsWith(base) && !(v.lang ?? '').toLowerCase().startsWith(code.toLowerCase().slice(0, 5))));
+    const best = match.find((v) => /google|natural|neural|online/i.test(v.name ?? '')) ?? match[0];
+    if (best) return best;
+  }
+  return null;
+}
+
+// Voices load late in some browsers: wait briefly for them the first time.
+function voicesOf(synth) {
+  const now = synth.getVoices?.() ?? [];
+  if (now.length || !synth.addEventListener) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const done = () => { synth.removeEventListener?.('voiceschanged', done); resolve(synth.getVoices?.() ?? []); };
+    synth.addEventListener('voiceschanged', done);
+    setTimeout(done, 700);
+  });
+}
+
 export function createSpeech(env = globalThis) {
   const synth = env.speechSynthesis;
   const Recognition = env.SpeechRecognition ?? env.webkitSpeechRecognition;
   const Utterance = env.SpeechSynthesisUtterance;
 
+  let latest = 0;
   return {
     canSpeak: Boolean(synth && Utterance),
     canListen: Boolean(Recognition),
 
-    speak(text, lang, { rate = 1 } = {}) {
-      if (!synth || !Utterance) return Promise.resolve(false);
+    async speak(text, lang, { rate = 1 } = {}) {
+      if (!synth || !Utterance) return false;
       synth.cancel();
+      const turn = ++latest;
+      const voice = pickVoice(await voicesOf(synth), lang);
+      if (turn !== latest) return false; // a newer prompt (or a listen) took over while the voices were loading
       return new Promise((resolve) => {
         const u = new Utterance(text);
-        u.lang = LOCALES[lang] ?? LOCALES.en;
-        u.rate = rate;
+        u.lang = voice?.lang || LOCALES[lang] || LOCALES.en; // the voice's own language, so a Hindi voice reading Marathi is not asked for mr-IN
+        if (voice) u.voice = voice;
+        u.rate = lang === 'mr' && voice && !/^mr/i.test(voice.lang) ? Math.min(rate, 0.9) : rate; // a little slower when borrowing the Hindi voice
         u.onend = () => resolve(true);
         u.onerror = () => resolve(false);
         synth.speak(u);
       });
     },
 
-    stopSpeaking() { synth?.cancel(); },
+    stopSpeaking() { latest++; synth?.cancel(); },
 
     // Resolves { transcript, confidence, alternatives }: the best guess plus the recognizer's other guesses, best first.
     // `onInterim(text)` receives the words while the patient is still speaking, so the screen can show them live.
@@ -37,6 +70,7 @@ export function createSpeech(env = globalThis) {
     listen(lang, { onInterim } = {}) {
       if (!Recognition) return Promise.reject(new Error('unsupported'));
       // The prompt being read aloud would otherwise be picked up by the microphone as the patient's answer.
+      latest++;
       synth?.cancel();
       return new Promise((resolve, reject) => {
         const r = new Recognition();

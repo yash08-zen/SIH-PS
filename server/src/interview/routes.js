@@ -1,10 +1,9 @@
 import express from 'express';
 import { audit, LANGS } from '../patients.js';
 import {
-  activeQuestions, deriveFromReason, displayAnswer, findQuestion, getQuestion, isAiKey, nextQuestion, presentQuestion, reviewList, staleKeys, structuredHistory, validateAnswer,
+  AI_FOLLOWUPS, activeQuestions, deriveFromReason, displayAnswer, findQuestion, getQuestion, isAiKey, nextQuestion, presentQuestion, reviewList, staleKeys, structuredHistory, validateAnswer,
 } from './dialogue.js';
-import { MAX_QUESTIONS } from '../../config/questions.v1.js';
-import { checkQuestion, interviewFacts } from '../ai/interviewer.js';
+import { MIN_FOLLOWUPS, checkQuestion, interviewFacts } from '../ai/interviewer.js';
 import { ageBand } from '../ai/facts.js';
 
 // Questions that can be filled from the reason in the patient's own words (dialogue.js deriveFromReason).
@@ -50,13 +49,17 @@ export function createInterviewRouter({ pool, redFlags, narration, help, analysi
     const facts = interviewFacts({
       reason: answers['cc.reason']?.skipped ? null : answers['cc.reason']?.value ?? null, ageGroup: ageBand(age), sex: p.sex ?? null,
       asked: asked.map((q) => ({ question: q.text[0], answer: answers[q.key].skipped ? 'not answered' : displayAnswer(q, answers[q.key], 'en') })),
-      remaining: MAX_QUESTIONS - asked.length,
+      remaining: AI_FOLLOWUPS - aiCount, minimumStillNeeded: Math.max(0, MIN_FOLLOWUPS - aiCount),
     });
+    // The model decides when it has enough, but not before the minimum: an early "done" is asked again once, then the interview moves on.
     let result;
-    try {
-      result = checkQuestion(await interviewer.next(facts), asked.map((q) => q.text[0]));
-    } catch (err) {
-      result = { ok: false, reason: `the model could not be used: ${String(err.message).slice(0, 160)}` };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        result = checkQuestion(await interviewer.next(facts), asked.map((q) => q.text[0]));
+      } catch (err) {
+        result = { ok: false, reason: `the model could not be used: ${String(err.message).slice(0, 160)}` };
+      }
+      if (!(result.ok && result.done && facts.minimumStillNeeded > 0 && attempt === 0)) break;
     }
     if (result.ok && result.complaint && !answers['cc.main']) {
       await pool.query(

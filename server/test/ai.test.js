@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startTestApp } from './helpers.js';
 import { png } from './doc-helpers.js';
-import { createAnthropicProvider, createRulesProvider, parseJsonReply } from '../src/ai/providers.js';
+import { createAnthropicProvider, createGeminiProvider, createRulesProvider, parseJsonReply, providerFromEnv } from '../src/ai/providers.js';
 
 const ALL = { history: true, documents: true, his_sharing: true, abha_linking: true };
 const CONFIRM = { visual: true, audio: true };
@@ -165,4 +165,26 @@ test('the reply parser accepts a fenced or wrapped reply and refuses an incomple
   assert.throws(() => parseJsonReply('nothing'), /JSON/);
   assert.throws(() => createAnthropicProvider({}), /ANTHROPIC_API_KEY/);
   assert.equal(createRulesProvider().name, 'rules-v1');
+});
+
+test('the Gemini writer sends the key in a header, the facts and the prompt, retries once when busy, and reads the JSON reply', async () => {
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    if (seen.length === 1) return { ok: false, status: 429, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: '{"en":"Fever.","hi":"बुखार।","mr":"ताप."}' }] } }] }) };
+  };
+  const g = createGeminiProvider({ apiKey: 'g-key', model: 'gemini-test', fetchImpl, retryMs: 1 });
+  const out = await g.narrate({ audience: 'doctor', facts: { answered: [{ question: 'Q', answer: 'Fever' }] } });
+  assert.deepEqual(out, { en: 'Fever.', hi: 'बुखार।', mr: 'ताप.' });
+  assert.equal(seen.length, 2, 'one retry after 429');
+  assert.match(seen[1].url, /models\/gemini-test:generateContent$/);
+  assert.equal(seen[1].headers['x-goog-api-key'], 'g-key');
+  assert.match(seen[1].body.systemInstruction.parts[0].text, /Do not diagnose/);
+  assert.equal(JSON.stringify(seen[1].body).includes('g-key'), false, 'the key is only in the header');
+  assert.equal(g.name, 'gemini');
+  const quiet = { warn() {} };
+  assert.equal(providerFromEnv({ AI_PROVIDER: 'gemini' }, quiet).name, 'rules-v1', 'no key: rules, not a crash');
+  assert.equal(providerFromEnv({ AI_PROVIDER: 'gemini', GEMINI_API_KEY: 'k' }, quiet).name, 'gemini');
+  assert.equal(providerFromEnv({}, quiet).name, 'rules-v1');
 });

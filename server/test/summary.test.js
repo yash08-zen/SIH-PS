@@ -61,7 +61,15 @@ test('submission produces a draft in the standard section order with a source on
 
 // Definition of Done 3: not answered is never "no", and the completeness indicator lists it.
 test('unanswered and skipped questions appear as not answered, never as no', async () => {
-  const p = await patient('Bina Das', { skip: ['hpi.progress'] });
+  const p = await patient('Bina Das');
+  // follow the interview's own path (it depends on the answers) until the medicines question, skipping one question on the way
+  let skippedOne = false;
+  for (let i = 0; i < 12; i++) {
+    const { question } = (await t.call('GET', '/api/patient/interview/next', { cookie: p.cookie })).body;
+    if (question.key === 'drug.current_any') break;
+    const first = question.type === 'yes_no' ? 'no' : question.type === 'number' ? 3 : question.type === 'multi' ? [question.options.at(-1).value] : question.type === 'text' ? 'some words' : question.options[0].value;
+    if (!skippedOne && question.section === 'hpi') { skippedOne = true; await p.answer(question.key, undefined, { skipped: true }); } else await p.answer(question.key, first);
+  }
   await p.answer('drug.current_any', undefined, { skipped: true });
   await p.submit();
   const { summary } = (await get(`/encounters/${p.enc}/summary`)).body;

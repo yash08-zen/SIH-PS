@@ -1,7 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startTestApp } from './helpers.js';
-import { checkQuestion, createGeminiInterviewer, interviewerFromEnv, parseReply } from '../src/ai/interviewer.js';
+import { MIN_FOLLOWUPS, SYSTEM, checkQuestion, createGeminiInterviewer, interviewerFromEnv, parseReply } from '../src/ai/interviewer.js';
+import { AI_FOLLOWUPS, AI_TOTAL } from '../src/interview/dialogue.js';
 import { MAX_QUESTIONS } from '../config/questions.v1.js';
 
 // A model reply in the shape the system prompt asks for.
@@ -127,16 +128,18 @@ let t, model;
 before(async () => { model = fakeModel(); t = await startTestApp({ aiInterviewer: model }); });
 after(async () => { await t.close(); });
 
-test('with the AI interviewer: reason, emergency signs, medicines, allergies, then questions written from the answers, ten at most', async () => {
+test('with the AI interviewer: reason, emergency signs, then questions written from the answers, medicines and allergies last, twelve at most', async () => {
   const { seen, patient } = await interview(t, '9811100001');
   const keys = seen.map((q) => q.key);
-  assert.deepEqual(keys.slice(0, 4), ['cc.reason', 'emergency.screen', 'drug.current_any', 'allergy.any']);
-  assert.ok(keys.slice(4).every((k) => k.startsWith('ai.')), keys.join(' > '));
-  assert.ok(keys.length <= MAX_QUESTIONS, `${keys.length} questions`);
-  assert.equal(keys.length, MAX_QUESTIONS, 'the model was allowed to use the whole budget');
-  assert.ok(seen.slice(4).every((q) => q.askedBy === 'ai'));
+  assert.deepEqual(keys.slice(0, 2), ['cc.reason', 'emergency.screen']);
+  const ai = keys.filter((k) => k.startsWith('ai.'));
+  assert.equal(ai.length, AI_FOLLOWUPS, 'the model was allowed to use its whole budget');
+  assert.deepEqual(keys.slice(2, 2 + ai.length), ai, 'its questions come straight after the reason and emergency signs');
+  assert.deepEqual(keys.slice(2 + ai.length), ['drug.current_any', 'allergy.any'], 'medicines and allergies are always asked, last');
+  assert.ok(keys.length <= AI_TOTAL, `${keys.length} questions`);
+  assert.ok(seen.slice(2, 2 + ai.length).every((q) => q.askedBy === 'ai'));
   // each question follows on from the previous answer
-  assert.match(seen[5].text, /after "Front"/);
+  assert.match(seen[3].text, /after "Front"/);
 
   // the model only ever saw de-identified facts
   const sent = JSON.stringify(model.calls);
@@ -179,6 +182,45 @@ test('when the model says it has enough, the interview ends early', async () => 
   const brief = await startTestApp({ aiInterviewer: fakeModel({ questions: 2 }) });
   try {
     const { seen } = await interview(brief, '9811100004');
+    // it said "done" after 2, but the minimum is 3: it is asked again, and as it still says done the interview ends after the minimum is met
     assert.equal(seen.filter((q) => q.key.startsWith('ai.')).length, 2);
+    assert.deepEqual(seen.slice(-2).map((q) => q.key), ['drug.current_any', 'allergy.any'], 'the closing questions still follow');
   } finally { await brief.close(); }
+});
+
+test('the model cannot say it has enough before the minimum: an early "done" is asked again once, and the model is told how many are still needed', async () => {
+  const calls = [];
+  const early = { name: 'gemini', model: 'fake', async next(facts) {
+    calls.push(facts);
+    // says done at once; when pressed, writes a question
+    if (calls.length === 1) return { done: true };
+    return reply({ complaint: 'other', rationale: 'asked after being told the minimum', question: { ...reply().question, en: `Asked ${calls.length}?`, hi: 'सवाल?', mr: 'प्रश्न?' } });
+  } };
+  const app = await startTestApp({ aiInterviewer: early });
+  try {
+    const { seen } = await interview(app, '9811100005');
+    assert.equal(calls[0].minimumStillNeeded, MIN_FOLLOWUPS);
+    assert.equal(calls[1].minimumStillNeeded, MIN_FOLLOWUPS, 'the same request, asked again');
+    assert.ok(seen.some((q) => q.key === 'ai.1'), 'the second try produced a question');
+  } finally { await app.close(); }
+});
+
+test('the prompt tells the model to follow the patient, not a list, and never to ask the safety questions the system asks last', () => {
+  assert.match(SYSTEM, /There is no fixed list/);
+  assert.match(SYSTEM, /asked separately by the system, at the end/);
+  assert.match(SYSTEM, /minimumStillNeeded/);
+});
+
+test('when the model fails part-way, the AI part ends and medicines and allergies are still asked', async () => {
+  let n = 0;
+  const flaky = { name: 'gemini', model: 'fake', async next() {
+    if (++n > 2) throw new Error('the model service answered 503');
+    return reply({ question: { ...reply().question, en: `Flaky ${n}?`, hi: 'सवाल?', mr: 'प्रश्न?' } });
+  } };
+  const app = await startTestApp({ aiInterviewer: flaky });
+  try {
+    const { seen } = await interview(app, '9811100006');
+    const keys = seen.map((q) => q.key);
+    assert.deepEqual(keys, ['cc.reason', 'emergency.screen', 'ai.1', 'ai.2', 'drug.current_any', 'allergy.any']);
+  } finally { await app.close(); }
 });

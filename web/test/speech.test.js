@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSpeech, audioCue, LOCALES } from '../src/speech/speech.js';
+import { createSpeech, audioCue, pickVoice, LOCALES } from '../src/speech/speech.js';
 
 test('locales cover English, Hindi and Marathi', () => {
   assert.deepEqual(LOCALES, { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN' });
@@ -67,4 +67,27 @@ test('listen reports no-speech and unsupported browsers so the screen can fall b
 
 test('audio cue is silent and safe when the browser has no audio', () => {
   assert.equal(audioCue({}), false);
+});
+
+const V = (name, lang) => ({ name, lang });
+test('Marathi is read by a Marathi voice, else by a Hindi voice (never the default English one); a network voice is preferred', () => {
+  const all = [V('English India', 'en-IN'), V('Hindi basic', 'hi-IN'), V('Google हिन्दी', 'hi-IN'), V('Marathi', 'mr-IN')];
+  assert.equal(pickVoice(all, 'mr').name, 'Marathi');
+  assert.equal(pickVoice(all.filter((v) => v.lang !== 'mr-IN'), 'mr').name, 'Google हिन्दी', 'no Marathi voice: the Hindi one');
+  assert.equal(pickVoice(all, 'hi').name, 'Google हिन्दी');
+  assert.equal(pickVoice(all, 'en').name, 'English India');
+  assert.equal(pickVoice([V('English India', 'en-IN')], 'mr'), null, 'only an English voice: none picked, so the app can tell the user');
+  assert.equal(pickVoice([V('Hindi', 'hi_IN')], 'hi').name, 'Hindi', 'underscore locale names');
+});
+
+test('speak gives the utterance the chosen voice, and borrows the Hindi voice for Marathi a little slower', async () => {
+  const spoken = [];
+  class Utterance { constructor(text) { this.text = text; } }
+  const hindi = V('Hindi', 'hi-IN');
+  const env = { SpeechSynthesisUtterance: Utterance, speechSynthesis: { cancel() {}, getVoices: () => [V('English', 'en-IN'), hindi], speak(u) { spoken.push(u); u.onend(); } } };
+  const s = createSpeech(env);
+  await s.speak('नमस्कार', 'mr', { rate: 1 });
+  assert.equal(spoken[0].voice, hindi);
+  assert.equal(spoken[0].lang, 'hi-IN');
+  assert.ok(spoken[0].rate < 1);
 });
