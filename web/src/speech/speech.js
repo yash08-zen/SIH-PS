@@ -1,5 +1,8 @@
-// Thin speech adapter (Phase 1). Wraps the browser speech APIs so screens can speak a prompt and listen for an answer.
-// Phase 2 hardens it (Bhashini / AI4Bharat models, noise handling, benchmarks) behind this same interface.
+// Speech adapter. Screens speak a prompt and listen for an answer through this one interface. When the server has Bhashini / AI4Bharat
+// speech switched on (SPEECH_PROVIDER=bhashini, as the SIH 26047 statement names) the audio goes there; if it is off, unreachable or fails,
+// the browser's own speech takes over, so a patient is never left without voice.
+import { recordUtterance } from './recorder.js';
+
 export const LOCALES = { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN' };
 
 // How long a single listen may run before it is stopped, so a missed "end of speech" never leaves the microphone open.
@@ -35,7 +38,7 @@ function voicesOf(synth) {
   });
 }
 
-export function createSpeech(env = globalThis) {
+export function createBrowserSpeech(env = globalThis) {
   const synth = env.speechSynthesis;
   const Recognition = env.SpeechRecognition ?? env.webkitSpeechRecognition;
   const Utterance = env.SpeechSynthesisUtterance;
@@ -98,6 +101,99 @@ export function createSpeech(env = globalThis) {
         r.onend = () => finish(reject, new Error('no-speech'));
         try { r.start(); } catch { finish(reject, new Error('error')); }
       });
+    },
+  };
+}
+
+const FAILED_STATUS_RETRY_MS = 30_000;
+
+// The browser's speech, with the server's Bhashini speech in front of it when it is on. `fetchImpl` and `record` can be replaced (tests).
+export function createSpeech(env = globalThis, { fetchImpl = env.fetch?.bind(env), record = (o) => recordUtterance({ env, ...o }) } = {}) {
+  const browser = createBrowserSpeech(env);
+  let state = null;      // { enabled, recognition, synthesis } once the server has said
+  let checkedAt = -Infinity;
+  let playing = null;    // the audio element speaking now
+  let turn = 0;
+  const cache = new Map();
+
+  // Asks the server whether Bhashini speech is on. Needs a patient session, so a 401 (not signed in yet) is asked again later.
+  async function prepare() {
+    if (state || !fetchImpl || Date.now() - checkedAt < FAILED_STATUS_RETRY_MS) return Boolean(state?.enabled);
+    checkedAt = Date.now();
+    try {
+      const r = await fetchImpl('/api/patient/speech/status', { credentials: 'same-origin' });
+      if (r.ok) { state = await r.json(); checkedAt = -Infinity; }
+    } catch { /* offline: the browser's speech is used */ }
+    return Boolean(state?.enabled);
+  }
+
+  async function fetchAudio(text, lang) {
+    const key = `${lang}|${text}`;
+    if (cache.has(key)) return cache.get(key);
+    const r = await fetchImpl('/api/patient/speech/synthesize', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, lang }) });
+    if (!r.ok) throw new Error('speech unavailable');
+    const url = URL.createObjectURL(await r.blob());
+    if (cache.size >= 40) { URL.revokeObjectURL(cache.get(cache.keys().next().value)); cache.delete(cache.keys().next().value); }
+    cache.set(key, url);
+    return url;
+  }
+
+  function play(url, rate) {
+    return new Promise((resolve) => {
+      const a = new env.Audio(url);
+      a.playbackRate = rate;
+      playing = a;
+      a.onended = () => resolve(true);
+      a.onerror = () => resolve(false);
+      a.play().catch(() => resolve(false));
+    });
+  }
+
+  return {
+    prepare,
+    get provider() { return state?.enabled ? 'bhashini' : 'browser'; },
+    get canSpeak() { return browser.canSpeak || Boolean(state?.synthesis); },
+    get canListen() { return browser.canListen || Boolean(state?.recognition && env.navigator?.mediaDevices?.getUserMedia); },
+
+    async speak(text, lang, opts = {}) {
+      const mine = ++turn;
+      if (await prepare() && state.synthesis && env.Audio) {
+        try {
+          browser.stopSpeaking();
+          const url = await fetchAudio(text, lang);
+          if (mine !== turn) return false; // a newer prompt took over while the audio was being fetched
+          return await play(url, opts.rate ?? 1);
+        } catch { /* fall back to the browser's voice */ }
+      }
+      return mine === turn ? browser.speak(text, lang, opts) : false;
+    },
+
+    stopSpeaking() {
+      turn++;
+      if (playing) { playing.pause(); playing = null; }
+      browser.stopSpeaking();
+    },
+
+    // Same result and the same errors as the browser's listen. With Bhashini the words arrive when the patient stops speaking, not live.
+    async listen(lang, opts = {}) {
+      turn++;
+      if (playing) { playing.pause(); playing = null; }
+      if (await prepare() && state.recognition) {
+        let wav;
+        try { wav = await record(); } catch (err) {
+          if (['denied', 'no-mic', 'no-speech'].includes(err.message)) throw err;
+          if (!browser.canListen) throw new Error('error');
+        }
+        if (wav) {
+          try {
+            const r = await fetchImpl(`/api/patient/speech/transcribe?lang=${encodeURIComponent(lang)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'audio/wav' }, body: wav });
+            if (r.ok) return r.json();
+            if (r.status === 422) throw new Error('no-speech');
+          } catch (err) { if (err.message === 'no-speech') throw err; }
+          if (!browser.canListen) throw new Error('network');
+        }
+      }
+      return browser.listen(lang, opts);
     },
   };
 }

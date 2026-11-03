@@ -85,6 +85,10 @@ export default function InterviewFlow({ onComplete }) {
     api(`/patient/interview/review?lang=${lang}`).then((r) => { if (r.ok) setReview(r.body.items); });
   }, [lang, step]);
 
+  // Learn whether the server has Bhashini speech on, so the voice controls match what is available.
+  const [, setSpeechProvider] = useState(null);
+  useEffect(() => { speech.prepare().then(() => setSpeechProvider(speech.provider)); }, []);
+
   // Speak each new question when listening is on (FR-A8).
   useEffect(() => {
     if (step === 'question' && question && present?.speakPrompt && voiceOn) speak(question.text);

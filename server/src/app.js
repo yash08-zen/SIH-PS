@@ -10,6 +10,7 @@ import { createHelp } from './alerts/help.js';
 import { createAlertService, createRedFlagEvaluator } from './alerts/service.js';
 import { createRuleNarrationMapper } from './interview/narration.js';
 import { interviewerFromEnv } from './ai/interviewer.js';
+import { speechFromEnv } from './speech/bhashini.js';
 import { createDocuments } from './documents/index.js';
 import { createAnalysisService } from './analysis/service.js';
 import { createSummaryService } from './summary/service.js';
@@ -43,7 +44,7 @@ function readCookie(req, name) {
 }
 
 export function createApp({ pool, jwtSecret, crypto, otp = createMockOtpProvider(), abdm = createStubAbdmProvider(), exposeDevCode = false,
-  redFlags, narration = createRuleNarrationMapper(), documents, analysisDelayMs, requireMfa = false, aiProvider, aiInterviewer, integration, loginLimiter = createLoginLimiter(), reportPool = pool, notifier, opsToken = process.env.OPS_TOKEN, monitorIntervalMs = 30_000 }) {
+  redFlags, narration = createRuleNarrationMapper(), documents, analysisDelayMs, requireMfa = false, aiProvider, aiInterviewer, speechProvider, integration, loginLimiter = createLoginLimiter(), reportPool = pool, notifier, opsToken = process.env.OPS_TOKEN, monitorIntervalMs = 30_000 }) {
   const app = express();
   const docs = documents ?? createDocuments({ pool, crypto });
   // Cross-document analysis (Phase 5): rebuilt whenever a file finishes, is added, removed, replaced or reordered, or a medicine or allergy answer changes.
@@ -54,6 +55,8 @@ export function createApp({ pool, jwtSecret, crypto, otp = createMockOtpProvider
   const ai = createAiAnalyst({ pool, provider: aiProvider ?? providerFromEnv() });
   // The AI interviewer (Gemini) writes the questions after the reason for the visit; null keeps the fixed question tree.
   const interviewer = aiInterviewer === undefined ? interviewerFromEnv() : aiInterviewer;
+  // Speech recognition and output through Bhashini / AI4Bharat when SPEECH_PROVIDER=bhashini; null keeps speech in the browser.
+  const speech = speechProvider === undefined ? speechFromEnv() : speechProvider;
   app.locals.ai = ai;
   const summary = createSummaryService({ pool, analysis, ai });
   const integ = integration ?? createIntegration({ pool, crypto, his: createHisConnector(), abdm });
@@ -175,7 +178,7 @@ export function createApp({ pool, jwtSecret, crypto, otp = createMockOtpProvider
   const mfaGate = (req, res, next) => (requireMfa && req.user && ['staff', 'doctor', 'admin'].includes(req.user.role) && !req.user.mfa ? res.status(403).json({ error: 'mfa_required' }) : next());
 
   // Patient identity (OTP, registration, lookup) and consent live in their own routers; they issue the patient session.
-  app.use('/api/patient', createPatientRouter({ pool, jwtSecret, crypto, otp, abdm, issueSession: issue, exposeDevCode, redFlags: evaluator, narration, help, docs, analysis, summary, purger, ai, interviewer }));
+  app.use('/api/patient', createPatientRouter({ pool, jwtSecret, crypto, otp, abdm, issueSession: issue, exposeDevCode, redFlags: evaluator, narration, help, docs, analysis, summary, purger, ai, interviewer, speech }));
   app.use('/api/staff', mfaGate, createStaffRouter({ pool, crypto, abdm, hub, service, help, integration: integ }));
   app.use('/api/doctor', mfaGate, createDoctorRouter({ pool, hub, service, help, analysis, summary, store: docs.store, integration: integ }));
 

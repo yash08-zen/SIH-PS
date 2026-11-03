@@ -557,3 +557,15 @@ html.high-contrast .pcard-ico { color: #000; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* urgent help: fixed on every patient screen */
+.urgent-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 24px; background: #fff4f3; border-top: 3px solid #d93a3a; box-shadow: 0 -6px 18px rgba(120, 20, 20, .12); }
+.urgent-note { margin: 0; font-size: 1.05rem; font-weight: 600; color: #7a1c1c; display: flex; align-items: center; gap: 10px; }
+.urgent-button { flex: none; min-height: 56px; padding: 0 28px; border: 0; border-radius: 999px; background: #d93a3a; color: #fff; font-size: 1.15rem; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(217, 58, 58, .45); }
+.urgent-button:hover:not(:disabled) { background: #b92a2a; }
+.urgent-button:focus-visible { outline: 4px solid #1b6ccd; outline-offset: 3px; }
+.urgent-bar.is-sent { background: #e6f6ec; border-top-color: #1f9a56; } .urgent-bar.is-sent .urgent-note { color: #14733f; } .urgent-bar.is-sent .urgent-button { background: #1f9a56; box-shadow: none; }
+.urgent-bar.is-failed .urgent-note { color: #b92a2a; }
+.journey { padding-bottom: 96px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 640px) { .urgent-bar { flex-direction: column; align-items: stretch; padding: 8px 14px; gap: 8px; } .urgent-note { font-size: .95rem; } .urgent-button { width: 100%; } .journey { padding-bottom: 150px; } }

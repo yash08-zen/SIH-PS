@@ -49,7 +49,7 @@ export async function createTestDatabase({ migrated = true, poolMax = 10 } = {})
 export const PASSWORDS = { staff: 'staff-test-pw', doctor: 'doctor-test-pw', admin: 'admin-test-pw' };
 
 // A migrated, seeded database plus a running app on a random port.
-export async function startTestApp({ redFlags, ocrEngine, limits, docWorkers = 3, his, requireMfa = false, loginLimiter, maxAttempts = 3, poolMax = 10, notifier, reportPool, monitorIntervalMs = 3_600_000, aiProvider, aiInterviewer = null } = {}) {
+export async function startTestApp({ redFlags, ocrEngine, limits, docWorkers = 3, his, requireMfa = false, loginLimiter, maxAttempts = 3, poolMax = 10, notifier, reportPool, monitorIntervalMs = 3_600_000, aiProvider, aiInterviewer = null, speechProvider = null } = {}) {
   const db = await createTestDatabase({ poolMax });
   await seed(db.url, { staffPassword: PASSWORDS.staff, doctorPassword: PASSWORDS.doctor, adminPassword: PASSWORDS.admin });
   const crypto = createCrypto({ encryptionKey: Buffer.alloc(32, 1), hashKey: Buffer.alloc(32, 2) });
@@ -61,7 +61,7 @@ export async function startTestApp({ redFlags, ocrEngine, limits, docWorkers = 3
   });
   const abdm = createStubAbdmProvider();
   const integration = createIntegration({ pool: db.pool, crypto, his: his ?? createHisConnector(), abdm, baseDelayMs: 20, maxAttempts, log: { error() {} } });
-  const app = createApp({ pool: db.pool, jwtSecret: 'test-secret', crypto, otp, abdm, integration, requireMfa, aiInterviewer, ...(aiProvider ? { aiProvider } : {}), ...(loginLimiter ? { loginLimiter } : {}), ...(notifier ? { notifier } : {}), ...(reportPool ? { reportPool } : {}), monitorIntervalMs, exposeDevCode: true, documents: docs, analysisDelayMs: 5, ...(redFlags ? { redFlags } : {}) });
+  const app = createApp({ pool: db.pool, jwtSecret: 'test-secret', crypto, otp, abdm, integration, requireMfa, aiInterviewer, speechProvider, ...(aiProvider ? { aiProvider } : {}), ...(loginLimiter ? { loginLimiter } : {}), ...(notifier ? { notifier } : {}), ...(reportPool ? { reportPool } : {}), monitorIntervalMs, exposeDevCode: true, documents: docs, analysisDelayMs: 5, ...(redFlags ? { redFlags } : {}) });
   const server = app.listen(0);
   const base = `http://127.0.0.1:${server.address().port}`;
 

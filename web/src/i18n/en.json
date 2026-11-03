@@ -679,5 +679,12 @@
   "interview.preparing": "Preparing your next question…",
   "ws.askedByAi": "Asked by AI",
   "ws.aiWhy": "Why the AI asked: {why}",
-  "help.reason.ai_attention": "The AI interviewer suggests a prompt look at this patient"
+  "help.reason.ai_attention": "The AI interviewer suggests a prompt look at this patient",
+  "urgent.label": "Urgent help",
+  "urgent.note": "If you feel very unwell, tell a staff member now.",
+  "urgent.button": "I need urgent help",
+  "urgent.again": "Staff are coming. Press again if needed",
+  "urgent.sent": "Staff have been told. Please stay where you are. Someone is coming.",
+  "urgent.failed": "We could not reach staff. Please call out or tell the nearest staff member now.",
+  "help.reason.urgent_help": "URGENT: the patient pressed the urgent help button"
 }

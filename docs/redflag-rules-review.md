@@ -20,6 +20,33 @@ Generated from `server/config/redflag-rules.v1.js` and `server/test/scenarios.js
 5. Is a pain score of 9 or 10 the right threshold for an attention alert? Is 8 or more with sudden headache right for the "thunderclap" rule?
 6. Are the must-not-alert scenarios below truly safe not to alert on?
 
+## Second net: emergency words and the urgent-help button
+
+**Words status (v1):** draft: awaiting clinician and language review. The rules above only see the answers to specific questions. Anything the patient types or says in their own words (the reason for the visit, every free-text answer, and the transcript of anything answered by voice) is also checked against the word list below, so an emergency nobody wrote a rule for can still raise an alert.
+
+- A term is one or more words that must sit next to each other; `*` at the end matches any ending ("bleed*" matches "bleeding"). Hindi and Marathi are included in Devanagari and, where patients commonly type that way, in English letters.
+- **emergency** terms always alert, even if negated ("no suicidal thoughts" still alerts): it is safer to over-alert. **attention** terms are ignored when a negating word (no, not, never, without, nil, denies, नहीं, नही, नाही, न, nahi, nahin, nai, nahee) is within three words.
+- Each category alerts once per patient. The alert says "automatic word match, please check" and shows the exact words the patient used.
+- **Urgent-help button:** every patient screen has a red "I need urgent help" button and the line "If you feel very unwell, tell a staff member now." One tap raises an emergency alert on the patient’s case (or, before registration, an urgent help request). The patient is told only that staff have been told.
+
+**Questions for the reviewer:** which words are missing in English, Hindi and Marathi? Which would cause false alarms (for example "burns" in a history of old burns, "accident" in a past accident)? Should any attention term be an emergency, or the reverse? Are the Hindi and Marathi words natural?
+
+| Category | Level | Terms |
+|---|---|---|
+| `UNCONSCIOUS` | emergency | unconscious, unresponsive, not responding, not waking, collapsed, बेहोश*, होश नहीं, बेसुध*, behosh*, बेशुद्ध*, शुद्धीवर नाही, शुद्ध हरपली, beshuddh* |
+| `FAINTING` | attention | faint*, passed out, blacked out, blackout, चक्कर आकर गिर, अँधेरा छा, अंधारी |
+| `SEIZURE` | emergency | seizure*, convulsion*, convulsing, shaking uncontrollably, foaming, मिर्गी का दौरा, दौरा पड़*, दौरे पड़*, झटके आ*, daura pad*, आकडी*, झटके येत*, aakdi* |
+| `BREATHING_STOPPED` | emergency | cant breathe, cannot breathe, unable to breathe, not able to breathe, stopped breathing, gasping, choking, साँस नहीं, सांस नहीं, सांस रुक*, दम घुट*, saans nahi, dam ghut*, श्वास घेता येत नाही, श्वास थांबला, दम घुटत* |
+| `BREATHING_DIFFICULT` | attention | difficulty breathing, trouble breathing, short of breath, shortness of breath, breathless*, साँस फूल*, सांस फूल*, सांस लेने में तकलीफ, साँस लेने में तकलीफ, दम लागत*, श्वास घेण्यास त्रास |
+| `BLEEDING_HEAVY` | emergency | heavy bleeding, bleeding heavily, bleeding a lot, wont stop bleeding, bleeding wont stop, vomiting blood, vomited blood, blood vomit, खून की उल्टी, बहुत खून, खून बह रहा, खून नहीं रुक, रक्ताची उलटी, खूप रक्त, रक्तस्राव थांबत नाही, रक्त वाहत* |
+| `BLEEDING` | attention | bleeding, bleeds, खून आ*, खून निकल*, रक्तस्राव*, रक्त येत*, khoon aa* |
+| `POISON_OVERDOSE` | emergency | poison*, overdose*, took too many, drank phenyl, pesticide, kerosene, snake bite, snakebite, bitten by snake, जहर*, ज़हर*, साँप ने काट*, सांप ने काट*, zeher, विष*, विषबाधा, साप चावला, साप चावल* |
+| `SELF_HARM` | emergency | suicide, suicidal, kill myself, end my life, want to die, wants to die, hurt myself, harm myself, cut myself, आत्महत्या*, मरना चाहत*, जान दे*, खुद को मार*, aatmahatya*, khudkushi*, मरावेसे वाटते, जीव द्यावा, स्वतःला मार* |
+| `STROKE_SIGNS` | emergency | face drooping, drooping face, slurred speech, cant speak, unable to speak, one side weak*, half body, paralysis, paralysed, paralyzed, sudden weakness, मुंह टेढ़ा, मुँह टेढ़ा, बोल नहीं पा*, लकवा*, पैरालिसिस, आधा शरीर, तोंड वाकडे, बोलता येत नाही, अर्धांग*, पक्षाघात |
+| `ALLERGY_SEVERE` | emergency | anaphylaxis, throat closing, throat swelling, swelling of face, swollen face, swollen lips, tongue swelling, गला बंद, गले में सूजन, चेहरे पर सूजन, होंठ सूज*, घसा बंद, चेहऱ्यावर सूज, ओठ सुज* |
+| `CHEST_PAIN` | attention | chest pain, chest tightness, pain in chest, pain in my chest, heart attack, सीने में दर्द, छाती में दर्द, सीने में जकड़न, दिल का दौरा, छातीत दुखत*, छातीत वेदना, हृदयविकाराचा झटका |
+| `INJURY_ACCIDENT` | attention | accident*, head injury, hit my head, fell from, burns, burnt, दुर्घटना*, एक्सीडेंट, जल गया, जल गई, सिर में चोट, अपघात*, भाजले, भाजला, डोक्याला मार |
+
 ## Rules
 
 | Rule | Version | Level | Reason (English) | Raised when |

@@ -6,6 +6,7 @@ import Icon from '../components/Icon.jsx';
 import IconButton from '../components/IconButton.jsx';
 import { Choice, VoiceField } from '../components/Fields.jsx';
 import { speech } from '../speech/speech.js';
+import UrgentHelp from '../components/UrgentHelp.jsx';
 import InterviewFlow from './InterviewFlow.jsx';
 import DocumentsFlow from './DocumentsFlow.jsx';
 
@@ -30,6 +31,7 @@ function Journey({ step, children }) {
         ))}
       </ol>
       <div className="journey-main">{children}</div>
+      <UrgentHelp screen={step} />
     </div>
   );
 }

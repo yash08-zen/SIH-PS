@@ -8,12 +8,13 @@ import { addIdentifier, checkIdentifiers, createPatient, validateRegistration } 
 import { createInterviewRouter } from './interview/routes.js';
 import { addToQueue } from './alerts/service.js';
 import { createDocumentsRouter } from './documents/routes.js';
+import { createSpeechRouter } from './speech/routes.js';
 
 export const OTP_MAX_ATTEMPTS = 3;
 export const OTP_MAX_SENDS = 3; // per mobile per 15 minutes
 const OTP_TTL_SECONDS = 300;
 
-export function createPatientRouter({ pool, jwtSecret, crypto, otp, abdm, issueSession, exposeDevCode, redFlags, narration, help, docs, analysis, summary, purger, ai, interviewer }) {
+export function createPatientRouter({ pool, jwtSecret, crypto, otp, abdm, issueSession, exposeDevCode, redFlags, narration, help, docs, analysis, summary, purger, ai, interviewer, speech = null }) {
   const router = express.Router();
 
   // FR-P5: nothing leaves the Patient portal API with analysis results, abnormal flags or alert levels.
@@ -259,6 +260,20 @@ export function createPatientRouter({ pool, jwtSecret, crypto, otp, abdm, issueS
     res.status(201).json({ requested: true });
   });
 
+  // The urgent-help button, on every patient screen. With a live session it raises an emergency alert on the patient's case at once; without one
+  // (before registration) staff still get an urgent help request. It needs no consent: asking for help is never blocked.
+  router.post('/urgent', async (req, res) => {
+    let patientId = null, encounterId = null;
+    if (req.user?.role === 'patient' && req.user.sid) {
+      const { rows: [s] } = await pool.query('SELECT state, encounter_id FROM patient_sessions WHERE id = $1', [req.user.sid]);
+      if (s && !['closed', 'revoked', 'purged'].includes(s.state)) { patientId = req.user.sub; encounterId = s.encounter_id; }
+    }
+    if (encounterId) await redFlags.urgent(encounterId);
+    await helpRequest(patientId, 'urgent_help', { screen: String(req.body?.screen ?? '').slice(0, 60), alert: Boolean(encounterId) });
+    if (patientId) await audit(pool, { actorType: 'patient', actorId: patientId, action: 'urgent_help_pressed', objectType: 'patient_session', objectId: req.user.sid, detail: { alert: Boolean(encounterId) } });
+    res.status(201).json({ notified: true }); // nothing about alerts goes back to the patient (FR-P5)
+  });
+
   // ---- Interview (Phase 2): every route needs a live session and history consent ----
   router.use('/interview', requireSession, requirePurpose('history'), createInterviewRouter({ pool, redFlags, narration, help, analysis, interviewer }));
 
@@ -276,6 +291,7 @@ export function createPatientRouter({ pool, jwtSecret, crypto, otp, abdm, issueS
   });
 
   // ---- Documents (Phase 4): needs a live session and the "documents" consent ----
+  router.use('/speech', requireSession, requirePurpose('history'), createSpeechRouter({ pool, speech }));
   router.use('/documents', requireSession, requirePurpose('documents'), createDocumentsRouter({ pool, store: docs.store, pipeline: docs.pipeline, limits: docs.limits, analysis }));
   // The patient's own recap, written after they submit: only what they said, in their language, with no checks, flags or findings (the doctor's
   // overview, which has those, is never sent here). It says who wrote it so the patient is never led to think a person did.

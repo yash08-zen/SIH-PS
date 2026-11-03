@@ -193,6 +193,23 @@ With `AI_INTERVIEW_PROVIDER=gemini` and `GEMINI_API_KEY` in `server/.env`, the i
 - Only de-identified facts (age group, sex, the reason and the answers) are sent to Google. This needs hospital and compliance approval and a consent decision first.
 - Limits to know: the fixed red-flag rules read the tree's questions, so for AI questions the model's own attention flag is what alerts staff. Have a clinician read sample interviews first: `node --env-file=.env server/scripts/export-ai-interviews.js` writes `docs/ai-interview-samples.md`. The real Gemini service has not been run here, only a stand-in.
 
+## Speech: Bhashini / AI4Bharat (voice conversation)
+
+The SIH 26047 statement names Bhashini / AI4Bharat for Indian-language speech recognition. With `SPEECH_PROVIDER=bhashini`, `BHASHINI_USER_ID` and `BHASHINI_API_KEY` in `server/.env` (credentials from bhashini.gov.in), the patient's spoken answer is recorded in the browser (stops when they go quiet, at most 12 seconds), sent to `POST /api/patient/speech/transcribe` as 16 kHz WAV and turned into words; prompts are spoken from `POST /api/patient/speech/synthesize`. English, Hindi and Marathi.
+
+- Off by default. If it is off, unreachable or fails, the browser's own speech is used, so a patient always has voice.
+- Audio and words are never stored or logged; the audit log keeps only the language, size and whether it worked. Both routes need a patient session and the history consent.
+- With Bhashini the words arrive when the patient stops speaking, not live as with the browser.
+- The request shapes follow Bhashini's pipeline API and are tested against a stand-in; they have not been run with real credentials.
+
+## Emergency detection beyond the rules
+
+The fixed red-flag rules only see the answers to specific questions, so there are two more nets for an emergency nobody wrote a rule for.
+
+- **Urgent-help button:** every patient screen has a red "I need urgent help" button and the line "If you feel very unwell, tell a staff member now." One tap raises an emergency alert on the patient's case (`POST /api/patient/urgent`), or, before registration, an urgent help request. It needs no consent and nothing is blocked. The patient is told only that staff know.
+- **Emergency word scan:** what the patient types or says in their own words (the reason for the visit, free-text answers, and the transcript of voice answers) is checked against a word list in English, Hindi and Marathi (`server/config/emergency-words.v1.js`). A match raises an alert that says "automatic word match, please check" and shows the exact words. Emergency terms always alert; milder ones are ignored when negated ("no bleeding").
+- The word list is a **developer draft** and has not been reviewed by a clinician or a native speaker. `node server/scripts/export-redflags.js` writes it into `docs/redflag-rules-review.md` for review. The scan is a net, not a diagnosis, and a person still sees every patient.
+
 ## Interface (redesign)
 
 Staff, doctor and admin share one app shell (`web/src/ui/Shell.jsx`): a dark-green sidebar (Navigation and More groups, help centre, the signed-in person), and a top bar with search, a light and dark switch, notifications and a settings menu (language, large text, high contrast, sign out). Each portal opens on a **Dashboard** (`web/src/portals/Dashboard.jsx`) fed by `GET /api/dashboard` (`server/src/dashboard.js`), with nothing hard-coded:

@@ -3,10 +3,17 @@ import { QUESTIONS } from '../../config/questions.v1.js';
 import { displayAnswer, getQuestion } from '../interview/dialogue.js';
 import { audit } from '../patients.js';
 import { evaluateRules } from './rules.js';
+import { textMatches } from './textscan.js';
 
 const LEVEL_PRIORITY = { emergency: 100, attention: 50 };
 const ACKNOWLEDGED_PRIORITY = 10; // still ahead of routine cases (0) until the consultation is over
 const LANGS = ['en', 'hi', 'mr'];
+
+// The urgent-help button: the patient says they need help now, whatever the questions asked. Always an emergency alert.
+export const URGENT_RULE = {
+  id: 'RF-URGENT-BUTTON', version: 1, level: 'emergency',
+  reason: ['The patient pressed the urgent help button', 'मरीज़ ने तुरंत मदद का बटन दबाया', 'रुग्णाने तातडीच्या मदतीचे बटण दाबले'],
+};
 
 // Token numbers restart each day; the advisory lock makes concurrent registrations take different numbers.
 export async function nextToken(db) {
@@ -60,21 +67,21 @@ export function createAlertService({ pool, hub }) {
       rulesetVersion: RULESET_VERSION,
       reason: match.rule.reason,
       triggers: match.triggerKeys.map((key) => {
-        const q = getQuestion(key);
         const a = answers[key];
+        // a question the AI interviewer wrote is kept with its answer, so it can be shown too
+        const q = getQuestion(key) ?? (a?.question ? { ...a.question, key } : null);
         return {
           key,
-          question: q.text,
-          answer: a.skipped ? null : LANGS.map((l) => displayAnswer(q, a, l)),
+          question: q ? q.text : [key, key, key],
+          answer: a.skipped ? null : LANGS.map((l) => (q ? displayAnswer(q, a, l) : String(a.value))),
           skipped: Boolean(a.skipped),
         };
       }),
     };
   }
 
-  // Evaluate after every saved answer. Returns the newly raised alerts (an already-raised rule is not raised twice).
-  async function evaluate({ encounterId, answers }) {
-    const matches = evaluateRules(answers);
+  // Raises each match once per encounter, tells staff, and sorts the patient up the queue.
+  async function raise(encounterId, matches, answers) {
     const raised = [];
     for (const m of matches) {
       const { rows } = await pool.query(
@@ -90,6 +97,17 @@ export function createAlertService({ pool, hub }) {
       raised.push({ ruleId: m.rule.id, reason: m.rule.reason[0] });
     }
     return raised;
+  }
+
+  // Evaluate after every saved answer: the structured rules, and the emergency words in what the patient wrote or said.
+  // Returns the newly raised alerts (an already-raised rule is not raised twice).
+  async function evaluate({ encounterId, answers }) {
+    return raise(encounterId, [...evaluateRules(answers), ...textMatches(answers)], answers);
+  }
+
+  // The patient pressed the urgent help button.
+  async function raiseUrgent(encounterId) {
+    return raise(encounterId, [{ rule: URGENT_RULE, triggerKeys: [] }], {});
   }
 
   // After acknowledgement the encounter returns to In intake (PRD 9.5) once nothing else is waiting for staff.
@@ -129,11 +147,11 @@ export function createAlertService({ pool, hub }) {
   }
 
   return {
-    name: 'rules-v1', evaluate, acknowledge, list, queue,
+    name: 'rules-v1', evaluate, raiseUrgent, acknowledge, list, queue,
   };
 }
 
 // Adapter with the interface the interview router expects (evaluate -> flags raised).
 export function createRedFlagEvaluator(service) {
-  return { name: 'rules-v1', evaluate: (arg) => service.evaluate(arg) };
+  return { name: 'rules-v1', evaluate: (arg) => service.evaluate(arg), urgent: (encounterId) => service.raiseUrgent(encounterId) };
 }
